@@ -228,6 +228,1003 @@ class ChargingSpot(ParkingSpot):
                                 { principle: 'ISP', violation: 'Potentially bloated base interfaces.', fix: 'Extracted clean, single-purpose Chargeable interface.' },
                                 { principle: 'DIP', violation: 'ParkingLot hardcoded pricing details.', fix: 'Injected PricingStrategy interface via ParkingLot.__init__().' }
                             ]
+                        },
+                        {
+                            id: 'srp-user-registration',
+                            title: 'S — Single Responsibility: User Registration',
+                            language: 'python',
+                            commits: [
+                                {
+                                    step: 1,
+                                    title: 'Commit 1: God Class — One class does everything',
+                                    code: `# srp_naive.py — Single Responsibility VIOLATION
+import sqlite3
+import smtplib
+import datetime
+
+class UserService:
+    """
+    SRP VIOLATION: This class has FOUR reasons to change:
+    1. Validation rules change
+    2. Database schema changes
+    3. Email provider changes
+    4. Logging format changes
+
+    Each of these concerns is a separate "axis of change".
+    """
+
+    def register_user(self, username: str, email: str, password: str):
+        # --- Responsibility 1: Validation ---
+        if len(username) < 3:
+            raise ValueError("Username must be at least 3 characters")
+        if "@" not in email:
+            raise ValueError("Invalid email address")
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters")
+
+        # --- Responsibility 2: Database Persistence ---
+        db = sqlite3.connect("users.db")
+        cursor = db.cursor()
+        cursor.execute(
+            "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+            (username, email, self._hash_password(password))
+        )
+        db.commit()
+        db.close()
+
+        # --- Responsibility 3: Email Notification ---
+        try:
+            smtp = smtplib.SMTP("smtp.gmail.com", 587)
+            smtp.starttls()
+            smtp.login("admin@myapp.com", "secret")
+            smtp.sendmail(
+                "admin@myapp.com",
+                email,
+                f"Subject: Welcome!\\n\\nHello {username}, welcome aboard!"
+            )
+            smtp.quit()
+        except Exception as e:
+            print(f"Email failed: {e}")
+
+        # --- Responsibility 4: Activity Logging ---
+        with open("activity.log", "a") as f:
+            f.write(f"[{datetime.datetime.now()}] User registered: {username}\\n")
+
+        return {"username": username, "email": email}
+
+    def _hash_password(self, password: str) -> str:
+        return f"hashed_{password}"  # Simplified for demo`,
+                                    architect_notes: `**SRP Violation Breakdown:**
+
+This \`UserService\` class has **four distinct responsibilities** — each is an independent reason for the class to change:
+
+- **Validation logic** — If password requirements change, this class changes
+- **Database access** — If we switch from SQLite to PostgreSQL, this class changes
+- **Email sending** — If we switch email providers (SendGrid, AWS SES), this class changes
+- **Logging** — If we change log format or switch to structured logging, this class changes
+
+**The "Newspaper Test":** If you described this class's purpose, you'd need four paragraphs. A well-designed class should be described in one sentence.`,
+                                    pivot_question: `If the business decides to switch from SQLite to PostgreSQL AND from Gmail SMTP to SendGrid simultaneously, how many places in this codebase need to change? What's the blast radius?`
+                                },
+                                {
+                                    step: 2,
+                                    title: 'Commit 2: Each class has ONE reason to change',
+                                    code: `# srp_refactored.py — Single Responsibility APPLIED
+import datetime
+
+
+class UserValidator:
+    """Responsibility: Validate user input. Changes when validation rules change."""
+
+    def validate(self, username: str, email: str, password: str):
+        errors = []
+        if len(username) < 3:
+            errors.append("Username must be at least 3 characters")
+        if "@" not in email:
+            errors.append("Invalid email address")
+        if len(password) < 8:
+            errors.append("Password must be at least 8 characters")
+        if errors:
+            raise ValueError("; ".join(errors))
+
+
+class UserRepository:
+    """Responsibility: Persist user data. Changes when storage layer changes."""
+
+    def save(self, username: str, email: str, hashed_password: str):
+        # Tomorrow we can swap SQLite for PostgreSQL — only THIS class changes
+        print(f"[DB] Saving user: {username} ({email})")
+        return {"id": 1, "username": username, "email": email}
+
+
+class EmailService:
+    """Responsibility: Send emails. Changes when email provider changes."""
+
+    def send_welcome_email(self, email: str, username: str):
+        # Tomorrow we can swap Gmail for SendGrid — only THIS class changes
+        print(f"[EMAIL] Sending welcome email to {email}")
+
+
+class ActivityLogger:
+    """Responsibility: Log activity. Changes when logging format changes."""
+
+    def log(self, message: str):
+        timestamp = datetime.datetime.now().isoformat()
+        print(f"[LOG {timestamp}] {message}")
+
+
+class PasswordHasher:
+    """Responsibility: Hash passwords. Changes when hashing algorithm changes."""
+
+    def hash(self, password: str) -> str:
+        return f"bcrypt_hashed_{password}"
+
+
+class UserRegistrationService:
+    """
+    SRP COMPLIANT: This class has ONE responsibility — orchestrate registration.
+    It delegates each concern to a specialist class.
+    """
+
+    def __init__(
+        self,
+        validator: UserValidator,
+        repository: UserRepository,
+        email_service: EmailService,
+        logger: ActivityLogger,
+        hasher: PasswordHasher,
+    ):
+        self.validator = validator
+        self.repository = repository
+        self.email_service = email_service
+        self.logger = logger
+        self.hasher = hasher
+
+    def register(self, username: str, email: str, password: str):
+        self.validator.validate(username, email, password)
+        hashed = self.hasher.hash(password)
+        user = self.repository.save(username, email, hashed)
+        self.email_service.send_welcome_email(email, username)
+        self.logger.log(f"User registered: {username}")
+        return user
+
+
+# --- Usage ---
+service = UserRegistrationService(
+    validator=UserValidator(),
+    repository=UserRepository(),
+    email_service=EmailService(),
+    logger=ActivityLogger(),
+    hasher=PasswordHasher(),
+)
+service.register("alice", "alice@example.com", "securepass123")`,
+                                    architect_notes: `**SRP Applied — Each class has ONE reason to change:**
+
+- \`UserValidator\` — changes only when validation rules change
+- \`UserRepository\` — changes only when the database layer changes
+- \`EmailService\` — changes only when the email provider changes
+- \`ActivityLogger\` — changes only when the logging strategy changes
+- \`PasswordHasher\` — changes only when the hashing algorithm changes
+
+**\`UserRegistrationService\`** is now a pure **orchestrator** — it delegates every concern. Its only responsibility is coordination.
+
+**Things to say in the interview:**
+*"SRP doesn't mean one method per class. It means one reason to change. I identify 'axes of change' — if the email provider swaps from Gmail to SendGrid, only EmailService changes. Zero blast radius on the rest of the system."*`,
+                                    pivot_question: `If we need to add phone number verification to registration, which classes would change and which wouldn't? How does SRP contain the blast radius?`
+                                }
+                            ],
+                            summary: [
+                                { principle: 'SRP', violation: 'One class handled validation, DB, email, and logging.', fix: 'Extracted each concern into its own specialist class.' },
+                                { principle: 'Testability', violation: 'Can\'t unit test validation without a real DB and SMTP server.', fix: 'Each class is independently testable with mocks.' }
+                            ]
+                        },
+                        {
+                            id: 'ocp-shape-calculator',
+                            title: 'O — Open/Closed: Shape Area Calculator',
+                            language: 'python',
+                            commits: [
+                                {
+                                    step: 1,
+                                    title: 'Commit 1: if/elif chain — must edit to extend',
+                                    code: `# ocp_naive.py — Open/Closed VIOLATION
+import math
+
+class AreaCalculator:
+    """
+    OCP VIOLATION: Every time we add a new shape, we MUST modify
+    this method. The class is NOT closed for modification.
+    """
+
+    def calculate_area(self, shape: dict) -> float:
+        shape_type = shape["type"]
+
+        if shape_type == "circle":
+            return math.pi * shape["radius"] ** 2
+
+        elif shape_type == "rectangle":
+            return shape["width"] * shape["height"]
+
+        elif shape_type == "triangle":
+            return 0.5 * shape["base"] * shape["height"]
+
+        # OCP FAILURE: What if we need a Pentagon? Hexagon? Trapezoid?
+        # We'd add MORE elif branches here, modifying tested code!
+        else:
+            raise ValueError(f"Unknown shape: {shape_type}")
+
+    def total_area(self, shapes: list) -> float:
+        return sum(self.calculate_area(s) for s in shapes)
+
+
+# --- Usage with raw dicts (fragile, no type safety) ---
+shapes = [
+    {"type": "circle", "radius": 5},
+    {"type": "rectangle", "width": 4, "height": 6},
+    {"type": "triangle", "base": 3, "height": 8},
+]
+
+calc = AreaCalculator()
+print(f"Total area: {calc.total_area(shapes)}")
+
+# PROBLEM: Adding a new shape means editing AreaCalculator.calculate_area()
+# This violates OCP and risks breaking existing, tested logic.`,
+                                    architect_notes: `**OCP Violation — The "New Shape" Test:**
+
+Every time a new shape is introduced, the \`calculate_area()\` method must be modified:
+- New \`elif\` branch added
+- Existing tested code is touched
+- Risk of introducing bugs in previously working shapes
+
+**The if/elif anti-pattern** is the most common OCP violation. It's a code smell that screams "this should be polymorphism."
+
+**Using raw dicts** compounds the problem — no type safety, no IDE autocomplete, easy to pass malformed data.`,
+                                    pivot_question: `If a team of 5 developers each needs to add a different shape type, how many merge conflicts will occur in this single file? How does this design scale with team size?`
+                                },
+                                {
+                                    step: 2,
+                                    title: 'Commit 2: Polymorphism — extend without modifying',
+                                    code: `# ocp_refactored.py — Open/Closed APPLIED
+import math
+from abc import ABC, abstractmethod
+
+
+class Shape(ABC):
+    """
+    OCP: Define an abstract interface. New shapes are ADDED by creating
+    new classes — the calculator never needs to change.
+    """
+
+    @abstractmethod
+    def area(self) -> float:
+        """Each shape knows how to compute its own area."""
+        pass
+
+    @abstractmethod
+    def name(self) -> str:
+        pass
+
+
+# --- Existing shapes (closed for modification) ---
+
+class Circle(Shape):
+    def __init__(self, radius: float):
+        self.radius = radius
+
+    def area(self) -> float:
+        return math.pi * self.radius ** 2
+
+    def name(self) -> str:
+        return f"Circle(r={self.radius})"
+
+
+class Rectangle(Shape):
+    def __init__(self, width: float, height: float):
+        self.width = width
+        self.height = height
+
+    def area(self) -> float:
+        return self.width * self.height
+
+    def name(self) -> str:
+        return f"Rectangle({self.width}x{self.height})"
+
+
+class Triangle(Shape):
+    def __init__(self, base: float, height: float):
+        self.base = base
+        self.height = height
+
+    def area(self) -> float:
+        return 0.5 * self.base * self.height
+
+    def name(self) -> str:
+        return f"Triangle(b={self.base}, h={self.height})"
+
+
+# --- NEW shape: Zero modifications to existing code! ---
+
+class Pentagon(Shape):
+    """OCP in action: Adding Pentagon required ZERO changes to existing classes."""
+
+    def __init__(self, side: float):
+        self.side = side
+
+    def area(self) -> float:
+        return (math.sqrt(5 * (5 + 2 * math.sqrt(5))) / 4) * self.side ** 2
+
+    def name(self) -> str:
+        return f"Pentagon(s={self.side})"
+
+
+# --- Calculator is now CLOSED for modification ---
+
+class AreaCalculator:
+    """This class NEVER changes when new shapes are added."""
+
+    def total_area(self, shapes: list[Shape]) -> float:
+        return sum(shape.area() for shape in shapes)
+
+    def print_report(self, shapes: list[Shape]):
+        for shape in shapes:
+            print(f"  {shape.name()}: {shape.area():.2f}")
+        print(f"  Total: {self.total_area(shapes):.2f}")
+
+
+# --- Usage ---
+shapes = [Circle(5), Rectangle(4, 6), Triangle(3, 8), Pentagon(4)]
+AreaCalculator().print_report(shapes)`,
+                                    architect_notes: `**OCP Applied — Open for extension, closed for modification:**
+
+- \`AreaCalculator\` is now **closed** — it will never be edited again for new shapes
+- Adding \`Pentagon\` required **zero changes** to any existing class
+- Each shape encapsulates its own area formula (also satisfying SRP!)
+
+**The key insight:** OCP is achieved through **polymorphism** and **abstractions**. The \`Shape\` abstract class defines a contract; concrete shapes fulfill it.
+
+**Things to say in the interview:**
+*"I use OCP to ensure that adding new features means adding new code, not modifying existing tested code. The AreaCalculator works with any Shape subclass — it doesn't know or care about the specifics."*`,
+                                    pivot_question: `What if shapes need both area() and perimeter()? How do you evolve the Shape interface without breaking existing implementations?`
+                                }
+                            ],
+                            summary: [
+                                { principle: 'OCP', violation: 'Adding shapes required modifying the if/elif chain in AreaCalculator.', fix: 'Abstract Shape class — new shapes are new classes, calculator never changes.' },
+                                { principle: 'Polymorphism', violation: 'Raw dicts with type strings — no safety, no IDE support.', fix: 'Type-safe Shape classes with enforced interface contracts.' }
+                            ]
+                        },
+                        {
+                            id: 'lsp-bird-hierarchy',
+                            title: 'L — Liskov Substitution: Bird Hierarchy',
+                            language: 'python',
+                            commits: [
+                                {
+                                    step: 1,
+                                    title: 'Commit 1: Penguin throws on fly() — breaks substitution',
+                                    code: `# lsp_naive.py — Liskov Substitution VIOLATION
+
+class Bird:
+    """Base class assumes ALL birds can fly."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def eat(self):
+        print(f"{self.name} is eating seeds")
+
+    def fly(self):
+        """LSP PROBLEM: Not all birds can fly!"""
+        print(f"{self.name} is soaring through the sky")
+
+
+class Sparrow(Bird):
+    """Sparrow can fly — no issues here."""
+    pass
+
+
+class Penguin(Bird):
+    """
+    LSP VIOLATION: Penguin overrides fly() to raise an exception.
+    Any code expecting a Bird and calling fly() will CRASH with a Penguin.
+    """
+
+    def fly(self):
+        # This BREAKS the contract established by Bird.fly()
+        raise NotImplementedError("Penguins can't fly!")
+
+    def swim(self):
+        print(f"{self.name} is swimming gracefully")
+
+
+class Ostrich(Bird):
+    """Another LSP VIOLATION — same problem as Penguin."""
+
+    def fly(self):
+        raise NotImplementedError("Ostriches can't fly!")
+
+    def run(self):
+        print(f"{self.name} is running at 45 mph")
+
+
+# --- This function EXPECTS all Birds can fly ---
+def bird_show(birds: list):
+    """
+    LSP Test: Can we substitute ANY Bird subclass here?
+    Answer: NO — Penguin and Ostrich will crash this function.
+    """
+    for bird in birds:
+        bird.eat()
+        bird.fly()  # BOOM! Crashes for Penguin and Ostrich
+        print("---")
+
+
+# This works fine
+bird_show([Sparrow("Jack"), Sparrow("Jill")])
+
+# This CRASHES — LSP violation exposed
+# bird_show([Sparrow("Jack"), Penguin("Tux"), Ostrich("Oscar")])`,
+                                    architect_notes: `**LSP Violation — The Substitution Test:**
+
+LSP states: *If S is a subtype of T, then objects of type T can be replaced with objects of type S without altering the correctness of the program.*
+
+**The failure:** \`Penguin\` and \`Ostrich\` are subtypes of \`Bird\`, but substituting them into \`bird_show()\` crashes the program. The subclass violates the parent's contract.
+
+**Root cause:** The \`Bird\` base class makes a **false assumption** — that all birds can fly. This is a modeling error at the hierarchy design level.
+
+**The Rectangle-Square Problem:** This is the same fundamental issue as the classic Rectangle/Square LSP violation — a subclass that can't fulfill its parent's promises.`,
+                                    pivot_question: `How would you redesign this hierarchy so that bird_show() can safely accept ANY bird subclass without crashing? What's the right abstraction boundary?`
+                                },
+                                {
+                                    step: 2,
+                                    title: 'Commit 2: Capability-based hierarchy — safe substitution',
+                                    code: `# lsp_refactored.py — Liskov Substitution APPLIED
+from abc import ABC, abstractmethod
+
+
+class Bird(ABC):
+    """
+    LSP FIX: Base Bird class only includes behaviors ALL birds share.
+    Flying is NOT a universal bird trait — it belongs in a subtype.
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+
+    @abstractmethod
+    def eat(self):
+        pass
+
+    @abstractmethod
+    def make_sound(self):
+        pass
+
+
+class FlyingBird(Bird):
+    """Only birds that CAN fly extend this class."""
+
+    @abstractmethod
+    def fly(self):
+        pass
+
+
+class SwimmingBird(Bird):
+    """Only birds that CAN swim extend this class."""
+
+    @abstractmethod
+    def swim(self):
+        pass
+
+
+# --- Concrete Birds: each fulfills its parent's FULL contract ---
+
+class Sparrow(FlyingBird):
+    """LSP SAFE: Sparrow IS-A FlyingBird. fly() works as expected."""
+
+    def eat(self):
+        print(f"{self.name} pecks at seeds")
+
+    def make_sound(self):
+        print(f"{self.name}: Chirp chirp!")
+
+    def fly(self):
+        print(f"{self.name} soars through the sky")
+
+
+class Penguin(SwimmingBird):
+    """
+    LSP SAFE: Penguin IS-A SwimmingBird (not FlyingBird).
+    No broken contracts — Penguin never promises to fly.
+    """
+
+    def eat(self):
+        print(f"{self.name} catches fish")
+
+    def make_sound(self):
+        print(f"{self.name}: Honk honk!")
+
+    def swim(self):
+        print(f"{self.name} glides through icy waters")
+
+
+class Ostrich(Bird):
+    """LSP SAFE: Ostrich IS-A Bird. No flying or swimming required."""
+
+    def eat(self):
+        print(f"{self.name} grazes on plants")
+
+    def make_sound(self):
+        print(f"{self.name}: Boom boom!")
+
+    def run(self):
+        print(f"{self.name} sprints at 45 mph")
+
+
+# --- Functions that work with ANY Bird — LSP guaranteed ---
+
+def bird_show(birds: list[Bird]):
+    """LSP SAFE: Only calls methods guaranteed by the Bird contract."""
+    for bird in birds:
+        bird.eat()
+        bird.make_sound()
+        print("---")
+
+
+def flying_show(birds: list[FlyingBird]):
+    """Type-safe: Only accepts birds that CAN fly."""
+    for bird in birds:
+        bird.fly()
+
+
+# All of these work safely — no crashes, no surprises
+bird_show([Sparrow("Jack"), Penguin("Tux"), Ostrich("Oscar")])
+flying_show([Sparrow("Jack"), Sparrow("Jill")])`,
+                                    architect_notes: `**LSP Applied — Capability-based hierarchy:**
+
+- \`Bird\` base class only defines **universal traits** (eat, make_sound)
+- \`FlyingBird\` and \`SwimmingBird\` are intermediate classes for **optional capabilities**
+- Every subclass **fully honors** its parent's contract — no exceptions thrown, no broken promises
+
+**Key insight:** LSP violations are almost always **modeling errors**. The fix isn't adding checks — it's redesigning the hierarchy to match reality.
+
+**Things to say in the interview:**
+*"I check LSP by asking: can I substitute any subclass into code expecting the base type without surprises? If a subclass throws NotImplementedError, that's a hierarchy design flaw, not a subclass problem."*`,
+                                    pivot_question: `What if a Duck can both fly AND swim? How do you handle multiple capabilities without multiple inheritance issues?`
+                                }
+                            ],
+                            summary: [
+                                { principle: 'LSP', violation: 'Penguin.fly() throws NotImplementedError — breaks parent contract.', fix: 'Redesigned hierarchy: FlyingBird/SwimmingBird capability classes.' },
+                                { principle: 'Modeling', violation: 'Assumed all birds fly — false abstraction.', fix: 'Only universal traits in base class; capabilities in subtypes.' }
+                            ]
+                        },
+                        {
+                            id: 'isp-worker-system',
+                            title: 'I — Interface Segregation: Worker Management',
+                            language: 'python',
+                            commits: [
+                                {
+                                    step: 1,
+                                    title: 'Commit 1: Fat interface — Robots forced to eat()',
+                                    code: `# isp_naive.py — Interface Segregation VIOLATION
+from abc import ABC, abstractmethod
+
+
+class Worker(ABC):
+    """
+    ISP VIOLATION: This is a "fat interface" — it forces ALL implementors
+    to define work(), eat(), sleep(), and take_break().
+
+    A Robot worker doesn't eat or sleep, but is FORCED to implement them.
+    """
+
+    @abstractmethod
+    def work(self):
+        pass
+
+    @abstractmethod
+    def eat(self, food: str):
+        pass
+
+    @abstractmethod
+    def sleep(self, hours: int):
+        pass
+
+    @abstractmethod
+    def take_break(self):
+        pass
+
+
+class HumanWorker(Worker):
+    """Human implements all methods naturally — no issue here."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def work(self):
+        print(f"{self.name} is coding features")
+
+    def eat(self, food: str):
+        print(f"{self.name} is eating {food}")
+
+    def sleep(self, hours: int):
+        print(f"{self.name} sleeps for {hours} hours")
+
+    def take_break(self):
+        print(f"{self.name} takes a coffee break")
+
+
+class RobotWorker(Worker):
+    """
+    ISP VIOLATION EXPOSED: Robot is FORCED to implement eat() and sleep()
+    even though they make no sense for a robot.
+    """
+
+    def __init__(self, model: str):
+        self.model = model
+
+    def work(self):
+        print(f"Robot {self.model} is assembling parts")
+
+    def eat(self, food: str):
+        # FORCED to implement — makes no sense for a robot!
+        raise NotImplementedError("Robots don't eat!")
+
+    def sleep(self, hours: int):
+        # FORCED to implement — makes no sense for a robot!
+        raise NotImplementedError("Robots don't sleep!")
+
+    def take_break(self):
+        print(f"Robot {self.model} enters standby mode")
+
+
+# --- Manager code that triggers ISP problems ---
+def lunch_break(workers: list):
+    """This function crashes when it encounters a RobotWorker."""
+    for worker in workers:
+        worker.eat("sandwich")  # BOOM for robots!
+        worker.take_break()
+
+
+team = [HumanWorker("Alice"), RobotWorker("T-800")]
+# lunch_break(team)  # Crashes on the Robot!`,
+                                    architect_notes: `**ISP Violation — The "Fat Interface" Problem:**
+
+The \`Worker\` interface forces every implementor to define 4 methods, even if some are meaningless:
+- \`RobotWorker\` must implement \`eat()\` → throws NotImplementedError
+- \`RobotWorker\` must implement \`sleep()\` → throws NotImplementedError
+
+**Why this is dangerous:** Client code (like \`lunch_break()\`) assumes all \`Worker\` objects can eat — a perfectly reasonable assumption given the interface. But robots break that assumption at runtime.
+
+**ISP says:** *"No client should be forced to depend on methods it does not use."* Split fat interfaces into focused, role-specific ones.`,
+                                    pivot_question: `What if we add a DroneWorker that can work but needs to recharge instead of eating? How many NotImplementedError methods would you need with this design?`
+                                },
+                                {
+                                    step: 2,
+                                    title: 'Commit 2: Segregated interfaces — implement only what fits',
+                                    code: `# isp_refactored.py — Interface Segregation APPLIED
+from abc import ABC, abstractmethod
+
+
+# --- ISP FIX: Small, focused interfaces for each capability ---
+
+class Workable(ABC):
+    """Can perform work tasks."""
+    @abstractmethod
+    def work(self):
+        pass
+
+
+class Eatable(ABC):
+    """Can consume food (biological entities)."""
+    @abstractmethod
+    def eat(self, food: str):
+        pass
+
+
+class Sleepable(ABC):
+    """Needs rest periods (biological entities)."""
+    @abstractmethod
+    def sleep(self, hours: int):
+        pass
+
+
+class Rechargeable(ABC):
+    """Can be recharged (electronic entities)."""
+    @abstractmethod
+    def recharge(self, minutes: int):
+        pass
+
+
+class Breakable(ABC):
+    """Can take breaks."""
+    @abstractmethod
+    def take_break(self):
+        pass
+
+
+# --- Classes implement ONLY the interfaces that apply ---
+
+class HumanWorker(Workable, Eatable, Sleepable, Breakable):
+    """Human: can work, eat, sleep, and take breaks."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def work(self):
+        print(f"{self.name} is coding features")
+
+    def eat(self, food: str):
+        print(f"{self.name} is eating {food}")
+
+    def sleep(self, hours: int):
+        print(f"{self.name} sleeps for {hours} hours")
+
+    def take_break(self):
+        print(f"{self.name} takes a coffee break")
+
+
+class RobotWorker(Workable, Rechargeable, Breakable):
+    """Robot: can work, recharge, and take breaks. Does NOT eat or sleep."""
+
+    def __init__(self, model: str):
+        self.model = model
+
+    def work(self):
+        print(f"Robot {self.model} is assembling parts")
+
+    def recharge(self, minutes: int):
+        print(f"Robot {self.model} recharging for {minutes} minutes")
+
+    def take_break(self):
+        print(f"Robot {self.model} enters standby mode")
+
+
+# --- Client code uses narrow interfaces — type-safe! ---
+
+def lunch_break(eaters: list[Eatable]):
+    """Only accepts entities that CAN eat — type system enforces this."""
+    for eater in eaters:
+        eater.eat("sandwich")
+
+def work_shift(workers: list[Workable]):
+    """Accepts anything that can work — humans, robots, drones."""
+    for worker in workers:
+        worker.work()
+
+def recharge_station(machines: list[Rechargeable]):
+    """Only accepts rechargeable entities."""
+    for machine in machines:
+        machine.recharge(30)
+
+
+# --- Safe usage — no crashes, no surprises ---
+humans = [HumanWorker("Alice"), HumanWorker("Bob")]
+robots = [RobotWorker("T-800"), RobotWorker("R2-D2")]
+
+work_shift(humans + robots)  # Both can work
+lunch_break(humans)          # Only humans eat
+recharge_station(robots)     # Only robots recharge`,
+                                    architect_notes: `**ISP Applied — Small, focused interfaces:**
+
+- \`Workable\` — just \`work()\`
+- \`Eatable\` — just \`eat()\`
+- \`Sleepable\` — just \`sleep()\`
+- \`Rechargeable\` — just \`recharge()\`
+
+**Key wins:**
+- \`RobotWorker\` no longer implements methods it can't fulfill
+- Client functions declare exactly what capability they need
+- The **type system** prevents passing a Robot to \`lunch_break()\` — caught at design time, not runtime
+
+**Things to say in the interview:**
+*"ISP is about designing interfaces from the client's perspective. I ask: what does this client actually need? Then I create an interface with exactly those methods — nothing more."*`,
+                                    pivot_question: `How does ISP interact with DIP here? If a manager function needs both Workable and Breakable, should you create a combined interface or accept two separate parameters?`
+                                }
+                            ],
+                            summary: [
+                                { principle: 'ISP', violation: 'Fat Worker interface forced Robot to implement eat() and sleep().', fix: 'Segregated into Workable, Eatable, Sleepable, Rechargeable.' },
+                                { principle: 'Type Safety', violation: 'Runtime NotImplementedError when Robot tries to eat.', fix: 'Compile-time safety — type system prevents invalid calls.' }
+                            ]
+                        },
+                        {
+                            id: 'dip-notification-system',
+                            title: 'D — Dependency Inversion: Order Notifications',
+                            language: 'python',
+                            commits: [
+                                {
+                                    step: 1,
+                                    title: 'Commit 1: Hardcoded dependency — tightly coupled',
+                                    code: `# dip_naive.py — Dependency Inversion VIOLATION
+
+class EmailSender:
+    """Low-level module: knows HOW to send emails."""
+
+    def send(self, to: str, subject: str, body: str):
+        print(f"[EMAIL] To: {to}")
+        print(f"  Subject: {subject}")
+        print(f"  Body: {body}")
+
+
+class SMSGateway:
+    """Another low-level module: knows HOW to send SMS."""
+
+    def send_sms(self, phone: str, message: str):
+        print(f"[SMS] To: {phone} | Message: {message}")
+
+
+class OrderService:
+    """
+    DIP VIOLATION: High-level module (OrderService) directly depends
+    on low-level modules (EmailSender, SMSGateway).
+
+    The dependency arrow points DOWNWARD — high depends on low.
+    """
+
+    def __init__(self):
+        # HARDCODED dependencies — created internally!
+        self.email_sender = EmailSender()
+        self.sms_gateway = SMSGateway()
+
+    def place_order(self, customer_email: str, customer_phone: str, item: str):
+        # Process the order
+        order_id = f"ORD-{hash(item) % 10000:04d}"
+        print(f"\\nOrder {order_id} placed for: {item}")
+
+        # DIP VIOLATION: Directly calling concrete implementations
+        self.email_sender.send(
+            customer_email,
+            f"Order Confirmation: {order_id}",
+            f"Your order for {item} has been placed!"
+        )
+
+        # DIP VIOLATION: What if we want to add Push Notifications?
+        # We'd have to modify THIS class to add self.push_service = PushService()
+        self.sms_gateway.send_sms(
+            customer_phone,
+            f"Order {order_id} confirmed: {item}"
+        )
+
+
+# --- Usage ---
+service = OrderService()
+service.place_order("alice@mail.com", "+1234567890", "Mechanical Keyboard")
+
+# PROBLEMS:
+# 1. Can't test OrderService without REAL EmailSender and SMSGateway
+# 2. Can't swap email providers without editing OrderService
+# 3. Adding new notification channels means modifying OrderService`,
+                                    architect_notes: `**DIP Violation — Dependency arrows point the wrong way:**
+
+\`OrderService\` (high-level policy) directly creates and depends on \`EmailSender\` and \`SMSGateway\` (low-level details):
+
+- **Tight coupling:** \`OrderService\` can't exist without \`EmailSender\`
+- **Untestable:** Unit testing \`OrderService\` sends real emails
+- **Rigid:** Adding Push Notifications means editing \`OrderService\`
+
+**DIP states:** *"High-level modules should not depend on low-level modules. Both should depend on abstractions."*
+
+The dependency arrow should be **inverted** — both the high-level and low-level modules should point toward an abstraction.`,
+                                    pivot_question: `How would you write a unit test for OrderService.place_order() without actually sending emails or SMS? What's blocking testability?`
+                                },
+                                {
+                                    step: 2,
+                                    title: 'Commit 2: Depend on abstractions — inverted control',
+                                    code: `# dip_refactored.py — Dependency Inversion APPLIED
+from abc import ABC, abstractmethod
+from typing import List
+
+
+# --- The ABSTRACTION that both layers depend on ---
+
+class NotificationService(ABC):
+    """
+    DIP: This abstraction is the "inversion point."
+    Both high-level (OrderService) and low-level (Email/SMS)
+    depend on THIS interface — not on each other.
+    """
+
+    @abstractmethod
+    def notify(self, recipient: str, subject: str, message: str):
+        pass
+
+
+# --- Low-level modules implement the abstraction ---
+
+class EmailNotification(NotificationService):
+    def notify(self, recipient: str, subject: str, message: str):
+        print(f"[EMAIL] To: {recipient} | Subject: {subject}")
+        print(f"  {message}")
+
+
+class SMSNotification(NotificationService):
+    def notify(self, recipient: str, subject: str, message: str):
+        print(f"[SMS] To: {recipient} | {message}")
+
+
+class PushNotification(NotificationService):
+    """Added WITHOUT modifying OrderService or any existing code!"""
+
+    def notify(self, recipient: str, subject: str, message: str):
+        print(f"[PUSH] To device: {recipient} | {subject}: {message}")
+
+
+class SlackNotification(NotificationService):
+    """Another channel — again, zero changes to existing code."""
+
+    def notify(self, recipient: str, subject: str, message: str):
+        print(f"[SLACK] Channel: {recipient} | {message}")
+
+
+# --- High-level module depends on ABSTRACTIONS ---
+
+class OrderService:
+    """
+    DIP COMPLIANT:
+    - Depends on NotificationService (abstraction), not EmailSender (concrete)
+    - Notification channels are INJECTED, not created internally
+    - Adding new channels requires ZERO changes to this class
+    """
+
+    def __init__(self, notifiers: List[NotificationService]):
+        # Dependencies INJECTED from outside (Inversion of Control)
+        self.notifiers = notifiers
+
+    def place_order(self, customer_id: str, item: str):
+        order_id = f"ORD-{hash(item) % 10000:04d}"
+        print(f"\\nOrder {order_id} placed for: {item}")
+
+        # Notify through ALL configured channels
+        for notifier in self.notifiers:
+            notifier.notify(
+                customer_id,
+                f"Order Confirmation: {order_id}",
+                f"Your order for {item} has been placed!"
+            )
+
+
+# --- Flexible configuration at composition root ---
+
+# Production: email + SMS + push
+prod_service = OrderService([
+    EmailNotification(),
+    SMSNotification(),
+    PushNotification(),
+])
+prod_service.place_order("alice@mail.com", "Mechanical Keyboard")
+
+# Testing: no real notifications needed
+class MockNotification(NotificationService):
+    def __init__(self):
+        self.sent = []
+    def notify(self, recipient, subject, message):
+        self.sent.append((recipient, subject, message))
+
+mock = MockNotification()
+test_service = OrderService([mock])
+test_service.place_order("test@test.com", "Test Item")
+print(f"\\nTest: {len(mock.sent)} notification(s) captured")`,
+                                    architect_notes: `**DIP Applied — Both layers depend on abstractions:**
+
+\`\`\`
+Before:  OrderService → EmailSender (high depends on low)
+After:   OrderService → NotificationService ← EmailNotification
+         (both depend on the abstraction)
+\`\`\`
+
+**Key wins:**
+- **Testable:** \`MockNotification\` makes unit testing trivial — no real emails sent
+- **Extensible:** Added \`PushNotification\` and \`SlackNotification\` with zero changes to \`OrderService\`
+- **Configurable:** Different environments can wire different notification stacks
+
+**DIP + DI (Dependency Injection):** DIP is the principle; DI is the technique. We *inject* the abstraction via the constructor rather than creating it internally.
+
+**Things to say in the interview:**
+*"I invert dependencies so high-level business logic doesn't know about low-level details. OrderService talks to a NotificationService interface — whether that's email, SMS, or a mock for testing, OrderService doesn't care."*`,
+                                    pivot_question: `How would you implement a notification priority system where critical orders use all channels but routine orders only use email? Where does that routing logic live?`
+                                }
+                            ],
+                            summary: [
+                                { principle: 'DIP', violation: 'OrderService directly created EmailSender and SMSGateway internally.', fix: 'Depends on NotificationService abstraction, injected via constructor.' },
+                                { principle: 'Testability', violation: 'Unit testing OrderService required real email/SMS infrastructure.', fix: 'MockNotification enables isolated, fast unit tests.' },
+                                { principle: 'OCP (bonus)', violation: 'Adding Push Notifications meant modifying OrderService.', fix: 'New channels added as new classes — zero changes to existing code.' }
+                            ]
                         }
                     ]
                 }
