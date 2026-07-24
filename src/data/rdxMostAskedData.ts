@@ -1,4 +1,4 @@
-import { Chapter, Lesson } from '../types/lesson';
+import { Chapter } from '../types/lesson';
 
 export const AMAZON_MOST_ASKED_CHAPTER: Chapter = {
   id: 'amazon-most-asked-lld',
@@ -185,6 +185,107 @@ class ParkingLot:
           step: 3,
           title: 'Commit 3: Pivot Absorption — Surge Pricing Decorator & Electric Spot Extension',
           code: `# 01_parking_lot_pivot.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from typing import Dict, List, Optional
+
+class VehicleType(Enum):
+    MOTORCYCLE = 1
+    CAR = 2
+    TRUCK = 3
+
+class SpotType(Enum):
+    SMALL = 1
+    MEDIUM = 2
+    LARGE = 3
+
+_FITS: Dict[VehicleType, List[SpotType]] = {
+    VehicleType.MOTORCYCLE: [SpotType.SMALL, SpotType.MEDIUM, SpotType.LARGE],
+    VehicleType.CAR: [SpotType.MEDIUM, SpotType.LARGE],
+    VehicleType.TRUCK: [SpotType.LARGE],
+}
+
+@dataclass
+class Vehicle:
+    plate: str
+    vtype: VehicleType
+
+class ParkingSpot:
+    def __init__(self, spot_id: str, spot_type: SpotType):
+        self.spot_id = spot_id
+        self.spot_type = spot_type
+        self.vehicle: Optional[Vehicle] = None
+
+    @property
+    def is_free(self) -> bool: return self.vehicle is None
+
+    def can_fit(self, vehicle: Vehicle) -> bool:
+        return self.is_free and self.spot_type in _FITS[vehicle.vtype]
+
+@dataclass
+class Ticket:
+    ticket_id: str
+    vehicle: Vehicle
+    spot: ParkingSpot
+    entry_time: datetime
+
+# --- Extension Points (Interfaces) ---
+class PricingStrategy(ABC):
+    @abstractmethod
+    def fee(self, ticket: Ticket, exit_time: datetime) -> float: ...
+
+class AllocationStrategy(ABC):
+    @abstractmethod
+    def find_spot(self, floors: List["ParkingFloor"], vehicle: Vehicle) -> Optional[ParkingSpot]: ...
+
+class HourlyPricing(PricingStrategy):
+    def __init__(self, rate_per_hour: float = 10.0): self.rate = rate_per_hour
+    def fee(self, ticket: Ticket, exit_time: datetime) -> float:
+        hours = max(1, round((exit_time - ticket.entry_time).total_seconds() / 3600))
+        return hours * self.rate
+
+class NearestFirstAllocation(AllocationStrategy):
+    def find_spot(self, floors: List["ParkingFloor"], vehicle: Vehicle) -> Optional[ParkingSpot]:
+        for floor in floors:
+            spot = floor.find_free_spot(vehicle)
+            if spot: return spot
+        return None
+
+class ParkingFloor:
+    def __init__(self, number: int, spots: List[ParkingSpot]):
+        self.number = number
+        self.spots = spots
+
+    def find_free_spot(self, vehicle: Vehicle) -> Optional[ParkingSpot]:
+        fitting = [s for s in self.spots if s.can_fit(vehicle)]
+        return min(fitting, key=lambda s: s.spot_type.value, default=None)
+
+class ParkingLot:
+    def __init__(self, floors: List[ParkingFloor], pricing: PricingStrategy, allocation: AllocationStrategy):
+        self.floors = floors
+        self.pricing = pricing
+        self.allocation = allocation
+        self._active: Dict[str, Ticket] = {}
+        self._counter = 0
+
+    def park(self, vehicle: Vehicle) -> Optional[Ticket]:
+        spot = self.allocation.find_spot(self.floors, vehicle)
+        if not spot: return None
+        spot.vehicle = vehicle
+        self._counter += 1
+        ticket = Ticket(f"T{self._counter}", vehicle, spot, datetime.now())
+        self._active[ticket.ticket_id] = ticket
+        return ticket
+
+    def unpark(self, ticket_id: str, exit_time: Optional[datetime] = None) -> float:
+        ticket = self._active.pop(ticket_id)
+        fee = self.pricing.fee(ticket, exit_time or datetime.now())
+        ticket.spot.vehicle = None
+        return fee
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # Interviewer: "Now we need SURGE pricing on weekends and Electric Vehicle Charging."
 # WINNING SENTENCE: "That's a new class implementing PricingStrategy — zero edits to ParkingLot."
 
@@ -354,6 +455,58 @@ class Order:
           step: 3,
           title: 'Commit 3: Pivot Absorption — Olives Topping & Order Discount Rules',
           code: `# 02_pizza_pivot.py
+from abc import ABC, abstractmethod
+from enum import Enum
+from typing import List
+
+class Item(ABC):
+    @abstractmethod
+    def cost(self) -> float: ...
+    @abstractmethod
+    def description(self) -> str: ...
+
+class Size(Enum):
+    SMALL = 8.0
+    MEDIUM = 10.0
+    LARGE = 12.0
+
+class Pizza(Item):
+    def __init__(self, size: Size): self.size = size
+    def cost(self) -> float: return self.size.value
+    def description(self) -> str: return f"{self.size.name.title()} pizza"
+
+class ToppingDecorator(Item):
+    def __init__(self, base: Item): self._base = base
+    @abstractmethod
+    def topping_name(self) -> str: ...
+    @abstractmethod
+    def topping_price(self) -> float: ...
+    def cost(self) -> float: return self._base.cost() + self.topping_price()
+    def description(self) -> str: return f"{self._base.description()} + {self.topping_name()}"
+
+class Cheese(ToppingDecorator):
+    def topping_name(self): return "cheese"
+    def topping_price(self): return 1.5
+
+class Mushroom(ToppingDecorator):
+    def topping_name(self): return "mushroom"
+    def topping_price(self): return 1.0
+
+class Drink(Item):
+    def __init__(self, name: str, price: float):
+        self.name = name
+        self.price = price
+    def cost(self) -> float: return self.price
+    def description(self) -> str: return self.name
+
+class Order:
+    def __init__(self): self.items: List[Item] = []
+    def add(self, item: Item):
+        self.items.append(item)
+        return self
+    def total(self) -> float: return round(sum(i.cost() for i in self.items), 2)
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "Olives is a new ToppingDecorator subclass; a drink is a new Item. Neither touches Pizza or Order."
 
 class Olives(ToppingDecorator):
@@ -544,8 +697,82 @@ class Cache:
           step: 3,
           title: 'Commit 3: Pivot Absorption — Swapping to FIFO Policy (Zero Cache Edits)',
           code: `# 03_lru_cache_pivot.py
+from abc import ABC, abstractmethod
+from typing import Dict, Optional
 from collections import deque
 
+class EvictionPolicy(ABC):
+    @abstractmethod
+    def on_access(self, key: int) -> None: ...
+    @abstractmethod
+    def on_insert(self, key: int) -> None: ...
+    @abstractmethod
+    def evict(self) -> int: ...
+
+class _Node:
+    __slots__ = ("key", "prev", "next")
+    def __init__(self, key: int = -1):
+        self.key = key
+        self.prev: Optional[_Node] = None
+        self.next: Optional[_Node] = None
+
+class LRUPolicy(EvictionPolicy):
+    def __init__(self):
+        self._nodes: Dict[int, _Node] = {}
+        self._head = _Node()
+        self._tail = _Node()
+        self._head.next = self._tail
+        self._tail.prev = self._head
+
+    def _unlink(self, n: _Node) -> None:
+        n.prev.next = n.next
+        n.next.prev = n.prev
+
+    def _push_front(self, n: _Node) -> None:
+        n.next = self._head.next
+        n.prev = self._head
+        self._head.next.prev = n
+        self._head.next = n
+
+    def on_access(self, key: int) -> None:
+        n = self._nodes[key]
+        self._unlink(n)
+        self._push_front(n)
+
+    def on_insert(self, key: int) -> None:
+        n = _Node(key)
+        self._nodes[key] = n
+        self._push_front(n)
+
+    def evict(self) -> int:
+        lru = self._tail.prev
+        self._unlink(lru)
+        del self._nodes[lru.key]
+        return lru.key
+
+class Cache:
+    def __init__(self, capacity: int, policy: Optional[EvictionPolicy] = None):
+        self.capacity = capacity
+        self.policy = policy or LRUPolicy()
+        self._store: Dict[int, int] = {}
+
+    def get(self, key: int) -> int:
+        if key not in self._store: return -1
+        self.policy.on_access(key)
+        return self._store[key]
+
+    def put(self, key: int, value: int) -> None:
+        if key in self._store:
+            self._store[key] = value
+            self.policy.on_access(key)
+            return
+        if len(self._store) >= self.capacity:
+            victim = self.policy.evict()
+            del self._store[victim]
+        self._store[key] = value
+        self.policy.on_insert(key)
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New EvictionPolicy implementation — Cache is untouched."
 
 class FIFOPolicy(EvictionPolicy):
@@ -564,11 +791,11 @@ class FIFOPolicy(EvictionPolicy):
 if __name__ == "__main__":
     c = Cache(2) # Default LRU
     c.put(1, 1); c.put(2, 2)
-    assert c.get(1) == 1 # 1 becomes MRU
+    assert c.get(1) == 1 # 1 is now MRU
     c.put(3, 3)          # evicts LRU = 2
     assert c.get(2) == -1 and c.get(3) == 3
 
-    # Pivot check: FIFO Policy injected into SAME Cache class
+    # Pivot check: same Cache, FIFO policy -> different victim
     f = Cache(2, FIFOPolicy())
     f.put(1, 1); f.put(2, 2)
     assert f.get(1) == 1 # read does NOT save 1 in FIFO!
@@ -622,7 +849,7 @@ class NaiveVendingMachine:
 
 - **Spaghetti Code:** Using booleans (\`has_money\`, \`is_dispensing\`) requires updating every method with nested \`if\` checks.
 - **State Pattern Solves This:** Each state is its own class defining valid transitions.`,
-          pivot_question: `Interviewer: "Add a MaintenanceState mode and item out-of-stock refund logic." How does your design handle state transitions cleanly?`,
+          pivot_question: `Interviewer: "What if the item is out of stock after money is inserted?" How does your design handle state transitions cleanly?`,
           mermaid: `classDiagram
     class NaiveVendingMachine {
         +bool has_money
@@ -751,7 +978,7 @@ class VendingMachine:
         +cancel()*
     }
     class IdleState { +insert_money() }
-    class HasMoneyState { +select() +cancel() }
+    class HasMoneyState { +select() }
     class DispenseState { +dispense() }
     State <|-- IdleState
     State <|-- HasMoneyState
@@ -762,10 +989,114 @@ class VendingMachine:
           step: 3,
           title: 'Commit 3: Pivot Absorption — Out-Of-Stock Refund & Maintenance State',
           code: `# 04_vending_machine_pivot.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, Optional
+
+@dataclass
+class Item:
+    code: str
+    name: str
+    price: int
+
+class Inventory:
+    def __init__(self):
+        self._stock: Dict[str, tuple[Item, int]] = {}
+
+    def add(self, item: Item, qty: int) -> None:
+        self._stock[item.code] = (item, qty)
+
+    def get(self, code: str) -> Optional[Item]:
+        entry = self._stock.get(code)
+        return entry[0] if entry else None
+
+    def in_stock(self, code: str) -> bool:
+        entry = self._stock.get(code)
+        return bool(entry) and entry[1] > 0
+
+    def reduce(self, code: str) -> None:
+        item, qty = self._stock[code]
+        self._stock[code] = (item, qty - 1)
+
+class State(ABC):
+    def __init__(self, machine: "VendingMachine"):
+        self.m = machine
+
+    def insert_money(self, amount: int) -> "State":
+        raise RuntimeError("cannot insert money now")
+
+    def select(self, code: str) -> "State":
+        raise RuntimeError("cannot select now")
+
+    def dispense(self) -> "State":
+        raise RuntimeError("nothing to dispense")
+
+    def cancel(self) -> "State":
+        raise RuntimeError("nothing to cancel")
+
+class IdleState(State):
+    def insert_money(self, amount: int) -> State:
+        self.m.balance += amount
+        return HasMoneyState(self.m)
+
+class HasMoneyState(State):
+    def insert_money(self, amount: int) -> State:
+        self.m.balance += amount
+        return self
+
+    def select(self, code: str) -> State:
+        if not self.m.inventory.in_stock(code):
+            self.m.refund()
+            return IdleState(self.m)
+        item = self.m.inventory.get(code)
+        if self.m.balance < item.price:
+            return self
+        self.m.selected = code
+        return DispenseState(self.m)
+
+    def cancel(self) -> State:
+        self.m.refund()
+        return IdleState(self.m)
+
+class DispenseState(State):
+    def dispense(self) -> State:
+        code = self.m.selected
+        item = self.m.inventory.get(code)
+        self.m.inventory.reduce(code)
+        self.m.change = self.m.balance - item.price
+        self.m.balance = 0
+        self.m.selected = None
+        return IdleState(self.m)
+
+class VendingMachine:
+    def __init__(self, inventory: Inventory):
+        self.inventory = inventory
+        self.balance = 0
+        self.change = 0
+        self.selected: Optional[str] = None
+        self.state: State = IdleState(self)
+
+    def insert_money(self, amount: int):
+        self.state = self.state.insert_money(amount)
+
+    def select(self, code: str):
+        self.state = self.state.select(code)
+
+    def dispense(self):
+        self.state = self.state.dispense()
+
+    def cancel(self):
+        self.state = self.state.cancel()
+
+    def refund(self):
+        self.change = self.balance
+        self.balance = 0
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New MaintenanceState class; VendingMachine.enter_service() switches to it. Existing states untouched."
 
 class MaintenanceState(State):
-    def dispense((self)) -> State:
+    def dispense(self) -> State:
         print("[MAINTENANCE] Servicing machine inventory...")
         return IdleState(self.m)
 
@@ -909,7 +1240,7 @@ class LockerBank:
 
 - **IntEnum Size Trick:** \`Size(IntEnum)\` enables direct \`package.size <= locker.size\` ordering comparisons.
 - **SRP:** OTP generation (\`OTPService\`) is completely decoupled from locker allocation.`,
-          pivot_question: `Magic Question: "Sizes are ordered data so fits is a comparison, not a switch statement. New size or new allocation rule = data/one class, no LockerBank change. Good?"`,
+          pivot_question: `Magic Question: "Sizes are ordered data so fits is a comparison, not a switch. New size or new allocation rule = data/one class, no LockerBank change. Good?"`,
           mermaid: `classDiagram
     class AllocationStrategy { <<interface>> +choose()* }
     class SmallestFitAllocation { +choose() }
@@ -930,6 +1261,75 @@ class LockerBank:
           step: 3,
           title: 'Commit 3: Pivot Absorption — Nearest Locker Allocation & Oversized Size Extension',
           code: `# 05_amazon_locker_pivot.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import IntEnum
+from typing import Dict, List, Optional
+import random
+
+class Size(IntEnum):
+    SMALL = 1
+    MEDIUM = 2
+    LARGE = 3
+    XL = 4
+
+@dataclass
+class Package:
+    package_id: str
+    size: Size
+
+class Locker:
+    def __init__(self, locker_id: str, size: Size):
+        self.locker_id = locker_id
+        self.size = size
+        self.package: Optional[Package] = None
+        self.otp: Optional[str] = None
+
+    @property
+    def is_free(self) -> bool: return self.package is None
+
+    def fits(self, package: Package) -> bool:
+        return self.is_free and package.size <= self.size
+
+class OTPService:
+    def generate(self) -> str:
+        return f"{random.randint(0, 999999):06d}"
+
+class AllocationStrategy(ABC):
+    @abstractmethod
+    def choose(self, lockers: List[Locker], package: Package) -> Optional[Locker]: ...
+
+class SmallestFitAllocation(AllocationStrategy):
+    def choose(self, lockers: List[Locker], package: Package) -> Optional[Locker]:
+        fitting = [lk for lk in lockers if lk.fits(package)]
+        return min(fitting, key=lambda lk: lk.size, default=None)
+
+class LockerBank:
+    def __init__(self, lockers: List[Locker], allocation: Optional[AllocationStrategy] = None, otp: Optional[OTPService] = None):
+        self.lockers = lockers
+        self.allocation = allocation or SmallestFitAllocation()
+        self.otp = otp or OTPService()
+        self._by_code: Dict[str, Locker] = {}
+
+    def place(self, package: Package) -> Optional[str]:
+        locker = self.allocation.choose(self.lockers, package)
+        if not locker: return None
+        code = self.otp.generate()
+        locker.package = package
+        locker.otp = code
+        self._by_code[code] = locker
+        return code
+
+    def pickup(self, code: str) -> Optional[Package]:
+        locker = self._by_code.get(code)
+        if not locker or locker.otp != code: return None
+        pkg = locker.package
+        locker.package = None
+        locker.otp = None
+        del self._by_code[code]
+        return pkg
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # Interviewer: "Allocate NEAREST locker to customer" & "Add OVERSIZED size"
 # WINNING SENTENCE: "Because size is ordered data, new size is a new enum member. Nearest is a new AllocationStrategy subclass."
 
@@ -1093,6 +1493,69 @@ class FileSearcher:
           step: 3,
           title: 'Commit 3: Pivot Absorption — ModifiedWithinFilter & Complex Boolean Combinations',
           code: `# 06_unix_search_pivot.py
+from abc import ABC, abstractmethod
+from typing import List
+
+class Entry(ABC):
+    def __init__(self, name: str): self.name = name
+    @abstractmethod
+    def walk(self) -> List["File"]: ...
+
+class File(Entry):
+    def __init__(self, name: str, size_kb: int):
+        super().__init__(name)
+        self.size_kb = size_kb
+
+    @property
+    def extension(self) -> str:
+        return self.name.rsplit(".", 1)[-1] if "." in self.name else ""
+
+    def walk(self) -> List["File"]: return [self]
+
+class Directory(Entry):
+    def __init__(self, name: str, children: List[Entry] = None):
+        super().__init__(name)
+        self.children: List[Entry] = children or []
+
+    def add(self, entry: Entry) -> "Directory":
+        self.children.append(entry)
+        return self
+
+    def walk(self) -> List["File"]:
+        files: List[File] = []
+        for child in self.children:
+            files.extend(child.walk())
+        return files
+
+class Filter(ABC):
+    @abstractmethod
+    def matches(self, f: File) -> bool: ...
+
+class NameFilter(Filter):
+    def __init__(self, name: str): self.name = name
+    def matches(self, f: File) -> bool: return f.name == self.name
+
+class ExtensionFilter(Filter):
+    def __init__(self, ext: str): self.ext = ext
+    def matches(self, f: File) -> bool: return f.extension == self.ext
+
+class MinSizeFilter(Filter):
+    def __init__(self, min_kb: int): self.min_kb = min_kb
+    def matches(self, f: File) -> bool: return f.size_kb >= self.min_kb
+
+class AndFilter(Filter):
+    def __init__(self, *filters: Filter): self.filters = filters
+    def matches(self, f: File) -> bool: return all(flt.matches(f) for flt in self.filters)
+
+class OrFilter(Filter):
+    def __init__(self, *filters: Filter): self.filters = filters
+    def matches(self, f: File) -> bool: return any(flt.matches(f) for flt in self.filters)
+
+class FileSearcher:
+    def search(self, root: Entry, flt: Filter) -> List[File]:
+        return [f for f in root.walk() if flt.matches(f)]
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # Interviewer: "Add a filter for files modified in the last N days" & "Combine (.txt OR .md) AND >= 100KB"
 # WINNING SENTENCE: "New Filter subclass (ModifiedWithinFilter). The searcher and the tree are untouched."
 

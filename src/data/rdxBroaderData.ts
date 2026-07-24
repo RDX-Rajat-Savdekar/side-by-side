@@ -108,6 +108,67 @@ class LoanService:
           step: 3,
           title: 'Commit 3: Pivot Absorption — StudentFriendlyPolicy (Zero Checkout Edits)',
           code: `# 01_library_pivot.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+
+@dataclass
+class Book:
+    isbn: str
+    title: str
+
+class BookCopy:
+    def __init__(self, copy_id: str, book: Book):
+        self.copy_id = copy_id
+        self.book = book
+        self.available = True
+
+@dataclass
+class Member:
+    member_id: str
+    tier: str
+
+class LoanPolicy(ABC):
+    @abstractmethod
+    def max_books(self, member: Member) -> int: ...
+    @abstractmethod
+    def loan_days(self, member: Member) -> int: ...
+
+class TieredLoanPolicy(LoanPolicy):
+    def max_books(self, member: Member) -> int:
+        return 10 if member.tier == "premium" else 3
+    def loan_days(self, member: Member) -> int:
+        return 30 if member.tier == "premium" else 14
+
+class Catalog:
+    def __init__(self):
+        self._copies: Dict[str, List[BookCopy]] = {}
+    def add_copy(self, copy: BookCopy) -> None:
+        self._copies.setdefault(copy.book.isbn, []).append(copy)
+    def free_copy(self, isbn: str) -> Optional[BookCopy]:
+        return next((c for c in self._copies.get(isbn, []) if c.available), None)
+
+class LoanService:
+    def __init__(self, catalog: Catalog, policy: Optional[LoanPolicy] = None):
+        self.catalog = catalog
+        self.policy = policy or TieredLoanPolicy()
+        self._held: Dict[str, List[str]] = {}
+
+    def checkout(self, member: Member, isbn: str) -> Optional[BookCopy]:
+        held = self._held.setdefault(member.member_id, [])
+        if len(held) >= self.policy.max_books(member):
+            return None
+        copy = self.catalog.free_copy(isbn)
+        if not copy: return None
+        copy.available = False
+        held.append(copy.copy_id)
+        return copy
+
+    def return_copy(self, member: Member, copy: BookCopy) -> None:
+        copy.available = True
+        self._held.get(member.member_id, []).remove(copy.copy_id)
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New LoanPolicy implementation injected into LoanService — checkout logic is untouched:"
 
 class StudentFriendlyPolicy(LoanPolicy):
@@ -210,7 +271,7 @@ class Elevator:
         self._retarget()
 
     @property
-    def busy((self)) -> bool: return bool(self._targets)
+    def busy(self) -> bool: return bool(self._targets)
 
 class DispatchStrategy(ABC):
     @abstractmethod
@@ -248,6 +309,66 @@ class ElevatorController:
           step: 3,
           title: 'Commit 3: Pivot Absorption — RoundRobinDispatch Strategy Injection',
           code: `# 02_elevator_pivot.py
+from abc import ABC, abstractmethod
+from enum import Enum
+from typing import List, Optional
+
+class Direction(Enum):
+    UP = 1
+    DOWN = -1
+    IDLE = 0
+
+class Elevator:
+    def __init__(self, car_id: int, floor: int = 0):
+        self.car_id = car_id
+        self.floor = floor
+        self.direction = Direction.IDLE
+        self._targets: set[int] = set()
+
+    def add_target(self, floor: int):
+        self._targets.add(floor)
+        self._retarget()
+
+    def _retarget(self):
+        if not self._targets:
+            self.direction = Direction.IDLE
+            return
+        nearest = min(self._targets, key=lambda f: abs(f - self.floor))
+        self.direction = Direction.UP if nearest > self.floor else (Direction.DOWN if nearest < self.floor else Direction.IDLE)
+
+    def step(self):
+        if not self._targets:
+            self.direction = Direction.IDLE
+            return
+        self.floor += self.direction.value
+        self._targets.discard(self.floor)
+        self._retarget()
+
+    @property
+    def busy(self) -> bool: return bool(self._targets)
+
+class DispatchStrategy(ABC):
+    @abstractmethod
+    def select(self, cars: List[Elevator], floor: int) -> Elevator: ...
+
+class NearestCarDispatch(DispatchStrategy):
+    def select(self, cars: List[Elevator], floor: int) -> Elevator:
+        return min(cars, key=lambda c: (c.busy, abs(c.floor - floor)))
+
+class ElevatorController:
+    def __init__(self, cars: List[Elevator], dispatch: Optional[DispatchStrategy] = None):
+        self.cars = cars
+        self.dispatch = dispatch or NearestCarDispatch()
+
+    def request(self, floor: int) -> Elevator:
+        car = self.dispatch.select(self.cars, floor)
+        car.add_target(floor)
+        return car
+
+    def tick(self):
+        for car in self.cars: car.step()
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New DispatchStrategy (RoundRobinDispatch) injected into Controller — Elevator motion is untouched:"
 
 class RoundRobinDispatch(DispatchStrategy):
@@ -378,6 +499,53 @@ class RateLimiter:
           step: 3,
           title: 'Commit 3: Pivot Absorption — FixedWindow Strategy & Per-Team Quota',
           code: `# 03_rate_limiter_pivot.py
+from abc import ABC, abstractmethod
+from collections import deque
+from typing import Callable, Dict
+
+class LimiterAlgorithm(ABC):
+    @abstractmethod
+    def allow(self, now: float) -> bool: ...
+
+class TokenBucket(LimiterAlgorithm):
+    def __init__(self, capacity: int, refill_per_sec: float):
+        self.capacity = capacity
+        self.refill = refill_per_sec
+        self.tokens = float(capacity)
+        self.last = 0.0
+
+    def allow(self, now: float) -> bool:
+        self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.refill)
+        self.last = now
+        if self.tokens >= 1:
+            self.tokens -= 1
+            return True
+        return False
+
+class SlidingWindowLog(LimiterAlgorithm):
+    def __init__(self, limit: int, window_sec: float):
+        self.limit = limit
+        self.window = window_sec
+        self._hits: deque[float] = deque()
+
+    def allow(self, now: float) -> bool:
+        while self._hits and self._hits[0] <= now - self.window:
+            self._hits.popleft()
+        if len(self._hits) < self.limit:
+            self._hits.append(now)
+            return True
+        return False
+
+class RateLimiter:
+    def __init__(self, factory: Callable[[], LimiterAlgorithm]):
+        self._factory = factory
+        self._per_key: Dict[str, LimiterAlgorithm] = {}
+
+    def allow(self, key: str, now: float) -> bool:
+        algo = self._per_key.setdefault(key, self._factory())
+        return algo.allow(now)
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New LimiterAlgorithm implementation; RateLimiter facade takes it via factory — nothing else changes:"
 
 class FixedWindow(LimiterAlgorithm):
@@ -509,6 +677,49 @@ class NotificationService:
           step: 3,
           title: 'Commit 3: Pivot Absorption — SlackChannel & Retrying Decorator',
           code: `# 04_notification_pivot.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Dict, List
+
+class Channel(ABC):
+    @abstractmethod
+    def name(self) -> str: ...
+    @abstractmethod
+    def send(self, to: str, message: str) -> str: ...
+
+class SmsChannel(Channel):
+    def name(self): return "sms"
+    def send(self, to, message): return f"SMS->{to}: {message}"
+
+class EmailChannel(Channel):
+    def name(self): return "email"
+    def send(self, to, message): return f"EMAIL->{to}: {message}"
+
+class PushChannel(Channel):
+    def name(self): return "push"
+    def send(self, to, message): return f"PUSH->{to}: {message}"
+
+@dataclass
+class User:
+    user_id: str
+    prefs: List[str] = field(default_factory=list)
+
+class NotificationService:
+    def __init__(self):
+        self._channels: Dict[str, Channel] = {}
+
+    def register(self, channel: Channel) -> None:
+        self._channels[channel.name()] = channel
+
+    def notify(self, user: User, message: str) -> List[str]:
+        sent: List[str] = []
+        for pref in user.prefs:
+            channel = self._channels.get(pref)
+            if channel:
+                sent.append(channel.send(user.user_id, message))
+        return sent
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New Channel implementation, register it — service and existing channels untouched:"
 
 class SlackChannel(Channel):
@@ -648,6 +859,62 @@ class MusicPlayer:
           step: 3,
           title: 'Commit 3: Pivot Absorption — RepeatOne PlayOrder Strategy',
           code: `# 05_music_pivot.py
+import random
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import List, Optional
+
+@dataclass(frozen=True)
+class Song:
+    song_id: str
+    title: str
+    artist: str
+
+class Playlist:
+    def __init__(self): self._songs: List[Song] = []
+    def add(self, song: Song): self._songs.append(song)
+    @property
+    def songs(self) -> List[Song]: return list(self._songs)
+    def by_artist(self, artist: str) -> List[Song]:
+        return [s for s in self._songs if s.artist == artist]
+    def keep_only_artist(self, artist: str) -> None:
+        self._songs = [s for s in self._songs if s.artist == artist]
+
+class PlayOrder(ABC):
+    @abstractmethod
+    def order(self, songs: List[Song]) -> List[Song]: ...
+
+class Sequential(PlayOrder):
+    def order(self, songs: List[Song]) -> List[Song]: return list(songs)
+
+class Shuffle(PlayOrder):
+    def __init__(self, seed: Optional[int] = None):
+        self._rng = random.Random(seed)
+    def order(self, songs: List[Song]) -> List[Song]:
+        out = list(songs)
+        self._rng.shuffle(out)
+        return out
+
+class MusicPlayer:
+    def __init__(self, playlist: Playlist, order: Optional[PlayOrder] = None):
+        self.playlist = playlist
+        self.order = order or Sequential()
+        self._queue: List[Song] = []
+        self._pos = 0
+
+    def play(self) -> Optional[Song]:
+        self._queue = self.order.order(self.playlist.songs)
+        self._pos = 0
+        return self._current()
+
+    def next(self) -> Optional[Song]:
+        self._pos += 1
+        return self._current()
+
+    def _current(self) -> Optional[Song]:
+        return self._queue[self._pos] if 0 <= self._pos < len(self._queue) else None
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New PlayOrder implementation injected into the player — core logic untouched:"
 
 class RepeatOne(PlayOrder):
@@ -672,7 +939,7 @@ if __name__ == "__main__":
     assert rep.play().song_id == rep.next().song_id
     print("Music Player Verification PASSED")`,
           architect_notes: `**05 — Music Player: Pivot Verification**
-- **Zero Core Touch:** Added \`RepeatOne\` strategy without altering \`MusicPlayer\` or \`Playlist\`.`,
+- **Zero Core Edit:** Added \`RepeatOne\` strategy without altering \`MusicPlayer\` or \`Playlist\`.`,
           pivot_question: `How would you extend this to handle track progress audio buffering and gapless playback?`,
           mermaid: `classDiagram
     class PlayOrder { <<interface>> }
@@ -790,6 +1057,66 @@ class Cache(Generic[K, V]):
           step: 3,
           title: 'Commit 3: Pivot Absorption — Prefix Eviction & Per-Instance LFU Injections',
           code: `# 06_cache_api_pivot.py
+from abc import ABC, abstractmethod
+from collections import OrderedDict, defaultdict
+from typing import Dict, Generic, List, Optional, TypeVar
+
+K = TypeVar("K")
+V = TypeVar("V")
+
+class EvictionPolicy(ABC):
+    @abstractmethod
+    def record(self, key) -> None: ...
+    @abstractmethod
+    def forget(self, key) -> None: ...
+    @abstractmethod
+    def evict(self): ...
+
+class LRUPolicy(EvictionPolicy):
+    def __init__(self): self._order = OrderedDict()
+    def record(self, key):
+        self._order.pop(key, None)
+        self._order[key] = True
+    def forget(self, key): self._order.pop(key, None)
+    def evict(self):
+        key, _ = self._order.popitem(last=False)
+        return key
+
+class LFUPolicy(EvictionPolicy):
+    def __init__(self): self._freq = defaultdict(int)
+    def record(self, key): self._freq[key] += 1
+    def forget(self, key): self._freq.pop(key, None)
+    def evict(self):
+        key = min(self._freq, key=lambda k: self._freq[k])
+        del self._freq[key]
+        return key
+
+class Cache(Generic[K, V]):
+    def __init__(self, capacity: int, policy: Optional[EvictionPolicy] = None):
+        self.capacity = capacity
+        self.policy = policy or LRUPolicy()
+        self._store: Dict[K, V] = {}
+
+    def get(self, key: K) -> Optional[V]:
+        if key not in self._store: return None
+        self.policy.record(key)
+        return self._store[key]
+
+    def put(self, key: K, value: V) -> None:
+        if key not in self._store and len(self._store) >= self.capacity:
+            victim = self.policy.evict()
+            self._store.pop(victim, None)
+        self._store[key] = value
+        self.policy.record(key)
+
+    def evict_prefix(self, prefix: str) -> List[K]:
+        victims = [k for k in self._store if isinstance(k, str) and k.startswith(prefix)]
+        for k in victims:
+            del self._store[k]
+            self.policy.forget(k)
+        return victims
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "Evicting by prefix is a query over the store; evict_prefix scans keys and tells policy to forget them. Eviction strategy stays pure."
 
 if __name__ == "__main__":
@@ -923,6 +1250,58 @@ class Game:
           step: 3,
           title: 'Commit 3: Pivot Absorption — LoadedDie Injection (Zero Game Edits)',
           code: `# 07_snake_pivot.py
+import random
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+
+class Die(ABC):
+    @abstractmethod
+    def roll(self) -> int: ...
+
+class StandardDie(Die):
+    def __init__(self, sides: int = 6, seed: Optional[int] = None):
+        self.sides = sides
+        self._rng = random.Random(seed)
+    def roll(self) -> int: return self._rng.randint(1, self.sides)
+
+@dataclass(frozen=True)
+class Jump:
+    from_cell: int
+    to_cell: int
+
+class Board:
+    def __init__(self, size: int, jumps: List[Jump]):
+        self.size = size
+        self._jumps: Dict[int, int] = {j.from_cell: j.to_cell for j in jumps}
+    def resolve(self, position: int) -> int:
+        return self._jumps.get(position, position)
+
+class Player:
+    def __init__(self, name: str):
+        self.name = name
+        self.position = 0
+
+class Game:
+    def __init__(self, board: Board, players: List[Player], die: Optional[Die] = None):
+        self.board = board
+        self.players = players
+        self.die = die or StandardDie()
+        self._turn = 0
+        self.winner: Optional[Player] = None
+
+    def play_turn(self) -> Player:
+        player = self.players[self._turn % len(self.players)]
+        roll = self.die.roll()
+        target = player.position + roll
+        if target <= self.board.size: # overshoot forfeits move
+            player.position = self.board.resolve(target)
+            if player.position == self.board.size:
+                self.winner = player
+        self._turn += 1
+        return player
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New Die implementation injected into Game — turn logic is untouched:"
 
 class LoadedDie(Die):
@@ -1090,6 +1469,91 @@ class Game:
           step: 3,
           title: 'Commit 3: Pivot Absorption — 5x5 Grid with 4-in-a-Row Win Rule',
           code: `# 08_tictactoe_pivot.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
+from typing import List, Optional
+
+class Symbol(Enum):
+    X = "X"
+    O = "O"
+    EMPTY = " "
+
+@dataclass
+class Player:
+    name: str
+    symbol: Symbol
+
+class Board:
+    def __init__(self, size: int = 3):
+        self.size = size
+        self._grid: List[List[Symbol]] = [[Symbol.EMPTY] * size for _ in range(size)]
+        self.moves = 0
+
+    def place(self, r: int, c: int, symbol: Symbol) -> bool:
+        if not (0 <= r < self.size and 0 <= c < self.size): return False
+        if self._grid[r][c] is not Symbol.EMPTY: return False
+        self._grid[r][c] = symbol
+        self.moves += 1
+        return True
+
+    def get(self, r: int, c: int) -> Symbol: return self._grid[r][c]
+
+    @property
+    def is_full(self) -> bool: return self.moves == self.size * self.size
+
+class WinRule(ABC):
+    @abstractmethod
+    def is_win(self, board: Board, r: int, c: int) -> bool: ...
+
+class KInARowWin(WinRule):
+    def __init__(self, k: Optional[int] = None): self.k = k
+
+    def is_win(self, board: Board, r: int, c: int) -> bool:
+        symbol = board.get(r, c)
+        if symbol is Symbol.EMPTY: return False
+        need = self.k or board.size
+        for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+            count = 1 + self._run(board, r, c, dr, dc, symbol) + self._run(board, r, c, -dr, -dc, symbol)
+            if count >= need: return True
+        return False
+
+    @staticmethod
+    def _run(board: Board, r: int, c: int, dr: int, dc: int, symbol: Symbol) -> int:
+        steps = 0
+        r, c = r + dr, c + dc
+        while 0 <= r < board.size and 0 <= c < board.size and board.get(r, c) is symbol:
+            steps += 1
+            r, c = r + dr, c + dc
+        return steps
+
+class GameStatus(Enum):
+    IN_PROGRESS = 0
+    WIN = 1
+    DRAW = 2
+
+class Game:
+    def __init__(self, players: List[Player], size: int = 3, win_rule: Optional[WinRule] = None):
+        self.players = players
+        self.board = Board(size)
+        self.win_rule = win_rule or KInARowWin()
+        self._turn = 0
+        self.status = GameStatus.IN_PROGRESS
+        self.winner: Optional[Player] = None
+
+    def move(self, r: int, c: int) -> GameStatus:
+        if self.status is not GameStatus.IN_PROGRESS: return self.status
+        player = self.players[self._turn % len(self.players)]
+        if not self.board.place(r, c, player.symbol): return self.status
+        if self.win_rule.is_win(self.board, r, c):
+            self.status, self.winner = GameStatus.WIN, player
+        elif self.board.is_full:
+            self.status = GameStatus.DRAW
+        else:
+            self._turn += 1
+        return self.status
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "That's Game(players, size=N, win_rule=KInARowWin(4)) — Board and Game are untouched."
 
 if __name__ == "__main__":
@@ -1255,6 +1719,92 @@ class ATM:
           step: 3,
           title: 'Commit 3: Pivot Absorption — Custom CashDispenser & Runnable ATM Demo',
           code: `# 09_atm_pivot.py
+from abc import ABC, abstractmethod
+from typing import Dict, Optional
+
+class Account:
+    def __init__(self, number: str, pin: str, balance: int):
+        self.number = number
+        self.pin = pin
+        self.balance = balance
+
+class BankService:
+    def __init__(self): self._accounts: Dict[str, Account] = {}
+    def add(self, account: Account): self._accounts[account.number] = account
+    def authenticate(self, number: str, pin: str) -> bool:
+        acct = self._accounts.get(number)
+        return bool(acct) and acct.pin == pin
+    def balance(self, number: str) -> int: return self._accounts[number].balance
+    def debit(self, number: str, amount: int) -> bool:
+        acct = self._accounts[number]
+        if acct.balance < amount: return False
+        acct.balance -= amount
+        return True
+
+class CashDispenser(ABC):
+    @abstractmethod
+    def dispense(self, amount: int, inventory: Dict[int, int]) -> Optional[Dict[int, int]]: ...
+
+class GreedyDispenser(CashDispenser):
+    def dispense(self, amount: int, inventory: Dict[int, int]) -> Optional[Dict[int, int]]:
+        plan: Dict[int, int] = {}
+        remaining = amount
+        for denom in sorted(inventory, reverse=True):
+            take = min(remaining // denom, inventory[denom])
+            if take:
+                plan[denom] = take
+                remaining -= take * denom
+        if remaining != 0: return None
+        for denom, count in plan.items():
+            inventory[denom] -= count
+        return plan
+
+class ATMState(ABC):
+    def __init__(self, atm: "ATM"): self.atm = atm
+    def insert_card(self, number: str) -> "ATMState": raise RuntimeError("cannot insert card now")
+    def enter_pin(self, pin: str) -> "ATMState": raise RuntimeError("no card inserted")
+    def withdraw(self, amount: int) -> "ATMState": raise RuntimeError("authenticate first")
+
+class IdleState(ATMState):
+    def insert_card(self, number: str) -> ATMState:
+        self.atm.current_account = number
+        return CardInsertedState(self.atm)
+
+class CardInsertedState(ATMState):
+    def enter_pin(self, pin: str) -> ATMState:
+        if self.atm.bank.authenticate(self.atm.current_account, pin):
+            return AuthenticatedState(self.atm)
+        self.atm.current_account = None
+        return IdleState(self.atm)
+
+class AuthenticatedState(ATMState):
+    def withdraw(self, amount: int) -> ATMState:
+        acct = self.atm.current_account
+        if self.atm.bank.balance(acct) < amount:
+            self.atm.last_dispensed = None
+            return self
+        plan = self.atm.dispenser.dispense(amount, self.atm.inventory)
+        if plan is None:
+            self.atm.last_dispensed = None
+            return self
+        self.atm.bank.debit(acct, amount)
+        self.atm.last_dispensed = plan
+        return self
+
+class ATM:
+    def __init__(self, bank: BankService, inventory: Dict[int, int], dispenser: Optional[CashDispenser] = None):
+        self.bank = bank
+        self.inventory = inventory
+        self.dispenser = dispenser or GreedyDispenser()
+        self.state: ATMState = IdleState(self)
+        self.current_account: Optional[str] = None
+        self.last_dispensed: Optional[Dict[int, int]] = None
+
+    def insert_card(self, number: str): self.state = self.state.insert_card(number)
+    def enter_pin(self, pin: str): self.state = self.state.enter_pin(pin)
+    def withdraw(self, amount: int): self.state = self.state.withdraw(amount)
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New CashDispenser implementation injected into ATM — states and BankService untouched:"
 
 if __name__ == "__main__":
@@ -1403,6 +1953,76 @@ class BookingService:
           step: 3,
           title: 'Commit 3: Pivot Absorption — SeasonalPricing Strategy Injection',
           code: `# 10_hotel_pivot.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import date
+from enum import Enum
+from typing import Dict, List, Optional
+
+class RoomType(Enum):
+    SINGLE = "single"
+    DOUBLE = "double"
+    SUITE = "suite"
+
+@dataclass
+class Room:
+    room_id: str
+    room_type: RoomType
+
+@dataclass(frozen=True)
+class DateRange:
+    check_in: date
+    check_out: date
+
+    @property
+    def nights(self) -> int:
+        return (self.check_out - self.check_in).days
+
+    def overlaps(self, other: "DateRange") -> bool:
+        return self.check_in < other.check_out and other.check_in < self.check_out
+
+class PricingStrategy(ABC):
+    @abstractmethod
+    def price(self, room: Room, rng: DateRange) -> float: ...
+
+class PerNightPricing(PricingStrategy):
+    RATES = {RoomType.SINGLE: 80.0, RoomType.DOUBLE: 120.0, RoomType.SUITE: 250.0}
+    def price(self, room: Room, rng: DateRange) -> float:
+        return self.RATES[room.room_type] * rng.nights()
+
+@dataclass
+class Booking:
+    booking_id: str
+    room: Room
+    date_range: DateRange
+    price: float
+
+class BookingService:
+    def __init__(self, rooms: List[Room], pricing: Optional[PricingStrategy] = None):
+        self.rooms = rooms
+        self.pricing = pricing or PerNightPricing()
+        self._bookings: Dict[str, List[Booking]] = {}
+        self._counter = 0
+
+    def _is_free(self, room: Room, rng: DateRange) -> bool:
+        return all(not b.date_range.overlaps(rng) for b in self._bookings.get(room.room_id, []))
+
+    def available(self, room_type: RoomType, rng: DateRange) -> List[Room]:
+        return [r for r in self.rooms if r.room_type == room_type and self._is_free(r, rng)]
+
+    def book(self, room_type: RoomType, rng: DateRange) -> Optional[Booking]:
+        free = self.available(room_type, rng)
+        if not free: return None
+        room = free[0]
+        self._counter += 1
+        booking = Booking(f"B{self._counter}", room, rng, self.pricing.price(room, rng))
+        self._bookings.setdefault(room.room_id, []).append(booking)
+        return booking
+
+    def cancel(self, booking: Booking) -> None:
+        self._bookings.get(booking.room.room_id, []).remove(booking)
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New PricingStrategy injected into BookingService; availability and booking logic are untouched:"
 
 class SeasonalPricing(PricingStrategy):
@@ -1553,6 +2173,65 @@ class PriceCalculator:
           step: 3,
           title: 'Commit 3: Pivot Absorption — BuyNGetCheapestFree Discount Rule',
           code: `# 11_cart_pivot.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List
+
+@dataclass(frozen=True)
+class Product:
+    product_id: str
+    price: float
+
+@dataclass
+class LineItem:
+    product: Product
+    qty: int
+    @property
+    def subtotal(self) -> float: return self.product.price * self.qty
+
+class Cart:
+    def __init__(self): self._items: Dict[str, LineItem] = {}
+    def add(self, product: Product, qty: int = 1):
+        if product.product_id in self._items:
+            self._items[product.product_id].qty += qty
+        else:
+            self._items[product.product_id] = LineItem(product, qty)
+    def update_qty(self, product_id: str, qty: int):
+        if qty <= 0: self._items.pop(product_id, None)
+        else: self._items[product_id].qty = qty
+    def remove(self, product_id: str): self._items.pop(product_id, None)
+    @property
+    def items(self) -> List[LineItem]: return list(self._items.values())
+    def subtotal(self) -> float: return sum(li.subtotal for li in self.items)
+
+class DiscountRule(ABC):
+    @abstractmethod
+    def apply(self, subtotal: float, cart: Cart) -> float: ...
+
+class PercentageOff(DiscountRule):
+    def __init__(self, percent: float): self.percent = percent
+    def apply(self, subtotal: float, cart: Cart) -> float:
+        return subtotal * (self.percent / 100.0)
+
+class SpendThresholdOff(DiscountRule):
+    def __init__(self, threshold: float, flat_off: float):
+        self.threshold = threshold
+        self.flat_off = flat_off
+    def apply(self, subtotal: float, cart: Cart) -> float:
+        return self.flat_off if subtotal >= self.threshold else 0.0
+
+class PriceCalculator:
+    def __init__(self, rules: List[DiscountRule] = None, tax_rate: float = 0.0):
+        self.rules = rules or []
+        self.tax_rate = tax_rate
+
+    def total(self, cart: Cart) -> float:
+        subtotal = cart.subtotal()
+        discount = sum(rule.apply(subtotal, cart) for rule in self.rules)
+        taxed = (subtotal - discount) * (1 + self.tax_rate)
+        return round(taxed, 2)
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New DiscountRule implementation dropped into calculator's rule list — Cart and checkout untouched:"
 
 class BuyNGetCheapestFree(DiscountRule):
@@ -1576,7 +2255,7 @@ if __name__ == "__main__":
     # Pivot: Buy 2 Get 1 Free coupon check
     cart.add(Product("book", 10.0)) # 3 books
     combo = PriceCalculator([BuyNGetCheapestFree(2)])
-    assert combo.total(cart) == 22.0 # 32 - 10
+    assert combo.total(cart) == 20.0 # 30 - 10 (cheapest free)
     print("Shopping Cart Verification PASSED")`,
           architect_notes: `**11 — Shopping Cart: Pivot Verification**
 - **Zero Core Edit:** \`BuyNGetCheapestFree\` added as a new \`DiscountRule\` class without editing \`Cart\`.`,
@@ -1711,6 +2390,82 @@ class Game:
           step: 3,
           title: 'Commit 3: Pivot Absorption — AreaBomb Weapon Strategy (3x3 Target Yield)',
           code: `# 12_battleship_pivot.py
+from abc import ABC, abstractmethod
+from enum import Enum
+from typing import Dict, List, Optional, Set, Tuple
+
+Coord = Tuple[int, int]
+
+class ShotResult(Enum):
+    MISS = "miss"
+    HIT = "hit"
+    SUNK = "sunk"
+    REPEAT = "repeat"
+
+class Ship:
+    def __init__(self, name: str, cells: List[Coord]):
+        self.name = name
+        self.cells: Set[Coord] = set(cells)
+        self._hits: Set[Coord] = set()
+
+    def register_hit(self, cell: Coord) -> None: self._hits.add(cell)
+
+    @property
+    def is_sunk(self) -> bool: return self._hits == self.cells
+
+class Board:
+    def __init__(self, size: int):
+        self.size = size
+        self._cell_to_ship: Dict[Coord, Ship] = {}
+        self._ships: List[Ship] = []
+        self._fired: Set[Coord] = set()
+
+    def place_ship(self, ship: Ship) -> bool:
+        if any(not self._in_bounds(c) or c in self._cell_to_ship for c in ship.cells):
+            return False
+        for c in ship.cells: self._cell_to_ship[c] = ship
+        self._ships.append(ship)
+        return True
+
+    def _in_bounds(self, c: Coord) -> bool:
+        return 0 <= c[0] < self.size and 0 <= c[1] < self.size
+
+    def receive_fire(self, cell: Coord) -> ShotResult:
+        if cell in self._fired: return ShotResult.REPEAT
+        self._fired.add(cell)
+        ship = self._cell_to_ship.get(cell)
+        if not ship: return ShotResult.MISS
+        ship.register_hit(cell)
+        return ShotResult.SUNK if ship.is_sunk else ShotResult.HIT
+
+    @property
+    def all_sunk(self) -> bool: return all(s.is_sunk for s in self._ships)
+
+class Weapon(ABC):
+    @abstractmethod
+    def targets(self, center: Coord) -> List[Coord]: ...
+
+class SingleShot(Weapon):
+    def targets(self, center: Coord) -> List[Coord]: return [center]
+
+class Game:
+    def __init__(self, size: int):
+        self.boards = {0: Board(size), 1: Board(size)}
+        self._turn = 0
+        self.winner: Optional[int] = None
+
+    def place(self, player: int, ship: Ship) -> bool:
+        return self.boards[player].place_ship(ship)
+
+    def fire(self, player: int, cell: Coord, weapon: Optional[Weapon] = None) -> List[ShotResult]:
+        weapon = weapon or SingleShot()
+        opponent = 1 - player
+        results = [self.boards[opponent].receive_fire(t) for t in weapon.targets(cell)]
+        if self.boards[opponent].all_sunk: self.winner = player
+        self._turn = opponent
+        return results
+
+# --- STEP 5: THE PIVOT (Zero edits to existing classes) ---
 # WINNING SENTENCE: "New Weapon implementation returning 3x3 cells; Board.receive_fire and Game are untouched:"
 
 class AreaBomb(Weapon):
