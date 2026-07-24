@@ -1,10 +1,12 @@
 import { Subject } from '../types/lesson';
+import { AMAZON_MOST_ASKED_CHAPTER } from './rdxMostAskedData';
 
 export const RDX_SUBJECT: Subject = {
   id: 'rdx-notes',
   name: 'RDX Notes (Amazon LLD)',
   icon: '⚡',
   chapters: [
+    AMAZON_MOST_ASKED_CHAPTER,
     {
       id: 'amazon-lld-playbook',
       name: 'Amazon LLD Playbook & Decision Tree',
