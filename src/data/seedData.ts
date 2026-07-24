@@ -1,4 +1,5 @@
 import { Subject } from '../types/lesson';
+import { RDX_SUBJECT } from './rdxData';
 
 export const BASE_PROMPT = `# Code Evolution Lesson Generator
 
@@ -50,6 +51,7 @@ Respond with ONLY valid JSON (no markdown code fences) in this exact schema:
 
 export const SEED_DATA: { subjects: Subject[] } = {
   subjects: [
+    RDX_SUBJECT,
     {
       id: 'lld',
       name: 'Low-Level Design',
